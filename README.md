@@ -20,7 +20,6 @@ A **production-ready GraphQL microservices platform** with pure JWT authenticati
 - [Postman Collection](#-postman-collection)
 - [Troubleshooting](#-troubleshooting)
 - [Future Plans](#-future-plans)
-- [License](#-license)
 
 ---
 
@@ -537,14 +536,6 @@ docker compose exec mongo_blog mongosh --eval "use blog_db; show collections"
 - [ ] Create React/Next.js frontend
 - [ ] Add GraphQL subscriptions for real-time updates
 - [ ] Implement refresh token rotation with reuse detection
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
 
 ## 🙏 Acknowledgments
 
