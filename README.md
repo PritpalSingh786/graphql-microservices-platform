@@ -1,12 +1,6 @@
 ---
 # 🚀 GraphQL Microservices Platform
 
-[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
-[![Django](https://img.shields.io/badge/Django-5.2.12-green.svg)](https://www.djangoproject.com/)
-[![GraphQL](https://img.shields.io/badge/GraphQL-purple.svg)](https://graphql.org/)
-[![Docker](https://img.shields.io/badge/Docker-blue.svg)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
 A **production-ready GraphQL microservices platform** with pure JWT authentication, real-time WebSocket notifications, file upload support, and Docker containerization.
 
 ---
