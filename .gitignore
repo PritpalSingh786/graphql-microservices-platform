@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+*.log
+*.pid
+
+# Database
+*.sqlite3
+*.db
+
+# Docker
+*.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Environment
+.env.local
+.env.*.local
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Media/Static
+media/
+staticfiles/
+static/
+blog_service/media/
+
+# OS
+Thumbs.db

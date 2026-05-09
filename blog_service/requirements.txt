@@ -1,0 +1,11 @@
+Django==5.2.12
+graphene-django==3.2.0
+graphene==3.4.0
+pymongo==4.6.3
+mongoengine==0.29.1
+python-dotenv==1.2.2
+PyJWT==2.11.0
+django-cors-headers==4.4.0
+graphene-file-upload==1.3.0
+Pillow==10.4.0
+gunicorn==23.0.0
