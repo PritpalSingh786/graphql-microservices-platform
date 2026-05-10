@@ -139,23 +139,51 @@ All requests go through a layered middleware pipeline for authentication, loggin
 | Scope Attachment | Sets `user` and `device_id` in WebSocket scope |
 
 ### 🔄 Request Flow Diagram
-Client Request
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│ API GATEWAY │
-│ → JWTAuthMiddleware (jwt_middleware.py) │
-│ ├── Public? → Allow │
-│ └── Protected? → Verify JWT → Forward user_id │
-└─────────────────────────────────────────────────────────────┘
-│
-▼
-┌─────────────────────────────────────────────────────────────┐
-│ AUTH / BLOG SERVICE │
-│ → SimpleMiddleware → Log request │
-│ → GraphQL Middleware → Set user in context │
-│ → Resolver → Use authenticated user │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLIENT REQUEST                          │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      API GATEWAY (Port 8000)                    │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │           JWTAuthMiddleware (jwt_middleware.py)           │  │
+│  │                                                            │  │
+│  │  ┌──────────────┐      ┌──────────────────────────────┐  │  │
+│  │  │ Public Ops?  │──Yes─▶│ Allow (register, login)     │  │  │
+│  │  │ register,    │      │ → Forward to service         │  │  │
+│  │  │ login, etc   │      └──────────────────────────────┘  │  │
+│  │  └──────┬───────┘                                         │  │
+│  │         │ No                                              │  │
+│  │         ▼                                                 │  │
+│  │  ┌──────────────────────────────────────────────────────┐ │  │
+│  │  │ Protected? → Verify JWT                             │ │  │
+│  │  │   ├── Valid? → Extract user_id → Forward            │ │  │
+│  │  │   └── Invalid/Expired → Return 401 Unauthorized    │ │  │
+│  │  └──────────────────────────────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  AUTH / BLOG SERVICE (8001/8002)                │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │      SimpleMiddleware (simple_middleware.py)              │  │
+│  │         Log request → Method, Path, Timestamp             │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │    GraphQL AuthMiddleware (gql_schema/middleware.py)      │  │
+│  │         Extract user_id → Attach to request context       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              GraphQL Resolver                             │  │
+│  │         Use authenticated user from context               │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 
 ## ✨ Features
 
