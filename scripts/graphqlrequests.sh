@@ -148,7 +148,8 @@ the quote character itself.
 
 ```json
 {
-  "query": "query {  allUploads { id title description images createdAt } }"
+  "operationName": "GetAllUploads",
+  "query": "query GetAllUploads { allUploads { id title description images createdAt } }"
 }
 ```
 
@@ -160,11 +161,19 @@ the quote character itself.
 
 ```json
 {
-  "query": "query {upload(id: 1) {id title description images createdAt}}",
-
+  "operationName": "GetUpload",
+  "query": "query GetUpload($id: String!) { upload(id: $id) { id title description images createdAt } }",
+  "variables": {
+    "id": "69fe1e369aa4f8da354cd439"
+  }
 }
 ```
 ---
+
+{
+  "operationName": "GetMyUploads",
+  "query": "query GetMyUploads { myUploads { id title description images createdAt } }"
+}
 
 ## ✏️ 4. UPDATE Upload by ID (title and description)
 
