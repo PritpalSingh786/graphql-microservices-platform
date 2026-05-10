@@ -82,6 +82,80 @@ This is a **complete microservices-based authentication and content management p
 ```
 
 ---
+## 🔧 Middleware Architecture
+
+All requests go through a layered middleware pipeline for authentication, logging, and security.
+
+### API Gateway JWT Middleware
+**📁 Path:** `api_gateway/middleware/jwt_middleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Public Operations | `register`, `login`, `verifyEmail` → No token required |
+| Protected Operations | `me`, `myDevices`, `logout` → Valid JWT required |
+| Token Validation | Checks expiry, signature, issuer, audience |
+| Error Response | Returns `401 Unauthorized` for invalid/expired tokens |
+
+### Auth Service GraphQL Middleware
+**📁 Path:** `auth_service/gql_schema/middleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Token Extraction | From `Authorization: Bearer <token>` header |
+| User Lookup | Fetches user from PostgreSQL using `user_id` |
+| Context Attachment | Attaches `user` object to GraphQL context |
+
+### Auth Service Logging Middleware
+**📁 Path:** `auth_service/middleware/simple_middleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Request Logging | Logs method, path, timestamp |
+| Performance Monitoring | Tracks request duration |
+
+### Blog Service GraphQL Middleware
+**📁 Path:** `blog_service/gql_schema/middleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Token Extraction | From Authorization header |
+| Lightweight Auth | Decodes JWT without DB query for performance |
+
+### Blog Service Logging Middleware
+**📁 Path:** `blog_service/middleware/simple_middleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Request Logging | Logs all incoming requests |
+| Response Tracking | Logs status codes and durations |
+
+### WebSocket JWT Middleware
+**📁 Path:** `auth_service/users/websocketjwtmiddleware.py`
+
+| Function | Description |
+|----------|-------------|
+| Token Extraction | From WebSocket URL query string (`?token=xxx`) |
+| Async Verification | Uses `averify_token` for non-blocking validation |
+| Scope Attachment | Sets `user` and `device_id` in WebSocket scope |
+
+### 🔄 Request Flow Diagram
+Client Request
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│ API GATEWAY │
+│ → JWTAuthMiddleware (jwt_middleware.py) │
+│ ├── Public? → Allow │
+│ └── Protected? → Verify JWT → Forward user_id │
+└─────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────┐
+│ AUTH / BLOG SERVICE │
+│ → SimpleMiddleware → Log request │
+│ → GraphQL Middleware → Set user in context │
+│ → Resolver → Use authenticated user │
+└─────────────────────────────────────────────────────────────┘
 
 ## ✨ Features
 
