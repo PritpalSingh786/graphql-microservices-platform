@@ -50,6 +50,12 @@ class RegisterMutation(graphene.Mutation):
         ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
         rate_limit(ip, limit=3, window=60, key_prefix="register")
         
+        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_regex, email):
+            return RegisterMutation(
+                success=False,
+                message="Invalid email format. Example: user@domain.com"
+            )
         if len(username) < 4:
             return RegisterMutation(success=False, message="Username must be at least 4 characters")
         
