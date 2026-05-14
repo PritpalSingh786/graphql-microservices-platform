@@ -1,6 +1,6 @@
 import graphene
 from graphene_django import DjangoObjectType
-from users.models import User, Device, OutstandingToken
+from users.models import User, Device
 
 
 class UserType(DjangoObjectType):
@@ -15,10 +15,12 @@ class DeviceType(DjangoObjectType):
         fields = ("id", "device_name", "device_id", "last_login", "ip_address")
 
 
-class SessionType(DjangoObjectType):
-    class Meta:
-        model = OutstandingToken
-        fields = ("device_id", "platform", "created_at", "last_accessed", "expires_at")
+class SessionType(graphene.ObjectType):
+    device_id = graphene.String()
+    platform = graphene.String()
+    created_at = graphene.String()
+    device_name = graphene.String()
+    ip_address = graphene.String()
 
 
 class TokenType(graphene.ObjectType):

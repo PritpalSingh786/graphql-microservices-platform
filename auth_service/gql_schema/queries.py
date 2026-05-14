@@ -1,5 +1,5 @@
 import graphene
-from users.models import User, Device, OutstandingToken
+from users.models import User, Device
 from users.utils import get_active_tokens
 from .types import UserType, DeviceType, SessionType
 
@@ -12,7 +12,7 @@ class Query(graphene.ObjectType):
     user = graphene.Field(UserType, id=graphene.ID(required=True))
     
     def resolve_hello(self, info):
-        return "Welcome to GraphQL Auth API with Pure JWT!"
+        return "Welcome to GraphQL Auth API with Pure JWT + Redis!"
     
     def resolve_me(self, info):
         user_id = info.context.META.get('HTTP_X_USER_ID', '')
@@ -35,6 +35,7 @@ class Query(graphene.ObjectType):
             return []
         try:
             user = User.objects.get(id=user_id)
+            # Returns Redis-based active tokens
             return get_active_tokens(user)
         except User.DoesNotExist:
             return []

@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from celery.schedules import crontab
 
 load_dotenv()
 
@@ -9,11 +8,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
-# import django.http.request
-# _original = django.http.request.validate_host
-# def _force_allow(host, allowed_hosts):
-#     return True
-# django.http.request.validate_host = _force_allow
 ALLOWED_HOSTS = ['*', 'auth_service', 'auth_service:8001', 'localhost', '127.0.0.1']
 
 CSRF_TRUSTED_ORIGINS = [
@@ -34,7 +28,6 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'graphene_django',
-    'django_celery_beat',
     'corsheaders',
     'users',
 ]
@@ -116,25 +109,23 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
+# Redis URL (Single source of truth)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 # Celery Settings
-CELERY_BROKER_URL = os.getenv("REDIS_URL")
-CELERY_RESULT_BACKEND = os.getenv("REDIS_URL")
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = "Asia/Kolkata"
 
-CELERY_BEAT_SCHEDULE = {
-    "clean-expired-tokens-every-hour": {
-        "task": "users.tasks.clean_expired_tokens",
-        "schedule": crontab(minute=0, hour="*/1"),
-    },
-}
+# NO CELERY BEAT SCHEDULE - Redis handles token expiry automatically!
 
 # Cache Settings (for rate limiting)
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': os.getenv('REDIS_URL', 'redis://redis:6379/1'),
+        'LOCATION': REDIS_URL,
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
         }
@@ -145,7 +136,7 @@ CACHES = {
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [os.getenv("REDIS_URL")]},
+        "CONFIG": {"hosts": [REDIS_URL]},
     },
 }
 
@@ -156,35 +147,11 @@ CORS_ALLOW_CREDENTIALS = True
 GRAPHENE = {
     'SCHEMA': 'gql_schema.schema.schema',
     'MIDDLEWARE': [
-        'gql_schema.middleware.AuthMiddleware',  # ← YAHAN
+        'gql_schema.middleware.AuthMiddleware',
     ]
 }
+
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-
-# ========== PATCH: Allow underscore in hostname ==========
-# from django.http.request import validate_host
-# _original_validate_host = validate_host
-# def _allow_underscore(host, allowed_hosts):
-#     if host and '_' in host:
-#         return True
-#     return _original_validate_host(host, allowed_hosts)
-# import django.http.request
-# django.http.request.validate_host = _allow_underscore
-# # ==========================================================
-
-
-# Force allow all hosts
-# import django.http.request
-# def _allow_all(host, allowed_hosts):
-#     return True
-# django.http.request.validate_host = _allow_all
-
-# FORCE ALLOW ALL HOSTS
-# import django.http.request
-# _original = django.http.request.validate_host
-# def _force_allow(host, allowed_hosts):
-#     return True
-# django.http.request.validate_host = _force_allow
 
 if os.getenv('ENVIRONMENT') == 'production':
     # Production: no patch, use ALLOWED_HOSTS

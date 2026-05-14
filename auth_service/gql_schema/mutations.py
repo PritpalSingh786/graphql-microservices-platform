@@ -10,14 +10,15 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
 from graphql import GraphQLError
-from .types import UserType, TokenType, DeviceType, SessionType
+from .types import UserType, DeviceType, SessionType
 from users.tasks import send_email_task
 from users.models import Device
 from users.utils import (
     create_access_token, create_refresh_token, verify_token,
     store_refresh_token, limit_user_sessions, blacklist_token_by_value,
-    get_active_tokens, refresh_both_tokens, logout_from_device
+    get_active_tokens, refresh_both_tokens
 )
+from users.redis_token_manager import redis_token_manager
 
 User = get_user_model()
 token_generator = PasswordResetTokenGenerator()
@@ -131,10 +132,14 @@ class LoginMutation(graphene.Mutation):
         access_token = create_access_token(user, device_id, platform)
         refresh_token = create_refresh_token(user, device_id, platform)
         
-        # Store refresh token
-        store_refresh_token(refresh_token, user, device_id, platform)
+        # Store refresh token in REDIS (not database!)
+        store_refresh_token(
+            refresh_token, user, device_id, platform,
+            device_name=device_name,
+            ip_address=info.context.META.get('REMOTE_ADDR', '')
+        )
         
-        # Limit sessions
+        # Limit sessions using Redis
         limit_user_sessions(user, max_sessions=5)
         
         return LoginMutation(
@@ -186,12 +191,12 @@ class RefreshTokenMutation(graphene.Mutation):
         ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
         rate_limit(ip, limit=20, window=60, key_prefix="refresh")
         
-        # Verify refresh token
+        # Verify refresh token (uses Redis blacklist check)
         payload = verify_token(refresh_token, 'refresh')
         if not payload:
             return RefreshTokenMutation(success=False, message="Invalid or expired refresh token")
         
-        # Rotate tokens (blacklist old, create new)
+        # Rotate tokens (blacklist old in Redis, create new)
         new_access, new_refresh = refresh_both_tokens(refresh_token)
         
         if not new_access:
@@ -226,13 +231,8 @@ class LogoutMutation(graphene.Mutation):
             raise GraphQLError("User not found")
         
         if all_devices:
-            active_tokens = get_active_tokens(user)
-            count = len(active_tokens)
-            for token in active_tokens:
-                from users.utils import blacklist_token
-                blacklist_token(token.jti, reason="logout_all_devices")
-                token.is_active = False
-                token.save()
+            # Revoke all tokens from Redis
+            count = redis_token_manager.revoke_all_user_tokens(user.id, "logout_all_devices")
             return LogoutMutation(
                 success=True,
                 message=f"Logged out from {count} devices",
@@ -300,13 +300,8 @@ class SetNewPasswordMutation(graphene.Mutation):
             user.set_password(new_password)
             user.save()
             
-            # Blacklist all sessions after password change
-            active_tokens = get_active_tokens(user)
-            for token_obj in active_tokens:
-                from users.utils import blacklist_token
-                blacklist_token(token_obj.jti, reason="password_changed")
-                token_obj.is_active = False
-                token_obj.save()
+            # Revoke all sessions from Redis after password change
+            redis_token_manager.revoke_all_user_tokens(user.id, "password_changed")
             
             return SetNewPasswordMutation(success=True, message="Password reset successful! Please login again.")
         
@@ -322,7 +317,7 @@ class ChangePasswordMutation(graphene.Mutation):
     message = graphene.String()
     
     def mutate(self, info, old_password, new_password):
-        user_id = info.context.headers.get('X-User-Id', '')
+        user_id = info.context.META.get('HTTP_X_USER_ID', '')
         
         if not user_id:
             raise GraphQLError("Authentication required")
@@ -341,13 +336,8 @@ class ChangePasswordMutation(graphene.Mutation):
         user.set_password(new_password)
         user.save()
         
-        # Blacklist all sessions after password change
-        active_tokens = get_active_tokens(user)
-        for token_obj in active_tokens:
-            from users.utils import blacklist_token
-            blacklist_token(token_obj.jti, reason="password_changed")
-            token_obj.is_active = False
-            token_obj.save()
+        # Revoke all sessions from Redis after password change
+        redis_token_manager.revoke_all_user_tokens(user.id, "password_changed")
         
         return ChangePasswordMutation(success=True, message="Password changed successfully! Please login again.")
 
@@ -360,7 +350,7 @@ class RemoveDeviceMutation(graphene.Mutation):
     message = graphene.String()
     
     def mutate(self, info, device_id):
-        user_id = info.context.headers.get('X-User-Id', '')
+        user_id = info.context.META.get('HTTP_X_USER_ID', '')
         
         if not user_id:
             raise GraphQLError("Authentication required")
@@ -371,8 +361,8 @@ class RemoveDeviceMutation(graphene.Mutation):
         except (User.DoesNotExist, Device.DoesNotExist):
             raise GraphQLError("Device not found")
         
-        # Logout from that device
-        logout_from_device(user, device_id)
+        # Revoke device tokens from Redis
+        redis_token_manager.revoke_all_user_tokens(user.id, f"remove_device_{device_id}")
         
         # Delete device record
         device.delete()
@@ -386,8 +376,8 @@ class RemoveOtherDevicesMutation(graphene.Mutation):
     count = graphene.Int()
     
     def mutate(self, info):
-        user_id = info.context.headers.get('X-User-Id', '')
-        current_device_id = info.context.headers.get('X-Device-Id', '')
+        user_id = info.context.META.get('HTTP_X_USER_ID', '')
+        current_device_id = info.context.META.get('HTTP_X_DEVICE_ID', '')
         
         if not user_id:
             raise GraphQLError("Authentication required")
@@ -405,7 +395,7 @@ class RemoveOtherDevicesMutation(graphene.Mutation):
         count = devices.count()
         
         for device in devices:
-            logout_from_device(user, str(device.device_id))
+            redis_token_manager.revoke_all_user_tokens(user.id, f"remove_other_devices_{device.device_id}")
             device.delete()
         
         return RemoveOtherDevicesMutation(

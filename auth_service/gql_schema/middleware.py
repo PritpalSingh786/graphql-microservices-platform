@@ -1,6 +1,5 @@
 from users.utils import verify_token
 
-
 class AuthMiddleware:
     def resolve(self, next, root, info, **kwargs):
         request = info.context
@@ -17,7 +16,6 @@ class AuthMiddleware:
                 user_id = str(payload.get('user_id'))
                 device_id = payload.get('device_id')
         
-        # Store in META (not headers) — META is mutable
         request.META['HTTP_X_USER_ID'] = user_id if user_id else ''
         request.META['HTTP_X_DEVICE_ID'] = device_id if device_id else ''
         

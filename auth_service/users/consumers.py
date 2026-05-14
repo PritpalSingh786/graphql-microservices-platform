@@ -1,6 +1,6 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
-from users.utils import averify_token  # ← async version
+from users.utils import averify_token
 
 
 class AuthConsumer(AsyncWebsocketConsumer):
@@ -15,7 +15,7 @@ class AuthConsumer(AsyncWebsocketConsumer):
         device_id = None
         
         if token:
-            payload = await averify_token(token, 'access')  # ← await use karo
+            payload = await averify_token(token, 'access')
             if payload:
                 user_id = payload.get('user_id')
                 device_id = payload.get('device_id')

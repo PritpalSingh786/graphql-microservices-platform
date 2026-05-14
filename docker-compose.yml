@@ -112,28 +112,6 @@ services:
     command: celery -A auth_service worker --loglevel=info
     restart: unless-stopped
 
-  celery_beat:
-    build:
-      context: ./auth_service
-      dockerfile: Dockerfile.auth
-    container_name: celery_beat
-    environment:
-      DEBUG: ${DEBUG}
-      DB_HOST: postgres_auth
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      REDIS_URL: redis://redis:6379/0
-    env_file:
-      - ./auth_service/.env
-    volumes:
-      - ./auth_service:/app
-    depends_on:
-      - redis
-      - postgres_auth
-    networks:
-      - microservices_network
-    command: celery -A auth_service beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-    restart: unless-stopped
-
   blog_service:
     build:
       context: ./blog_service
