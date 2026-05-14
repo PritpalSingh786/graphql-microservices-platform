@@ -1,34 +1,67 @@
 {
   "info": {
     "name": "GraphQL Microservices API",
-    "description": "Complete GraphQL Microservices Platform with Pure JWT Authentication",
+    "description": "Complete GraphQL Microservices Platform with Pure JWT Authentication + Redis Token Management",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
       "name": "Auth Service",
-      "description": "Authentication and User Management",
+      "description": "Authentication and User Management with Redis",
       "item": [
         {
           "name": "1. Register User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.json().data?.register?.success) {",
+                  "    console.log('✅ User registered successfully');",
+                  "} else {",
+                  "    console.log('❌ Registration failed:', pm.response.json().data?.register?.message);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"RegisterUser\",\n  \"query\": \"mutation RegisterUser($username: String!, $email: String!, $password: String!) { register(username: $username, email: $email, password: $password) { success message } }\",\n  \"variables\": {\n    \"username\": \"testuser\",\n    \"email\": \"test@test.com\",\n    \"password\": \"Test@123\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"RegisterUser\",\n  \"query\": \"mutation RegisterUser($username: String!, $email: String!, $password: String!) { register(username: $username, email: $email, password: $password) { success message } }\",\n  \"variables\": {\n    \"username\": \"testuser\",\n    \"email\": \"test@example.com\",\n    \"password\": \"Test@123456\"\n  }\n}"
             }
           },
           "response": []
         },
         {
           "name": "2. Login User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const jsonData = pm.response.json();",
+                  "if (jsonData.data?.login?.success) {",
+                  "    pm.collectionVariables.set('accessToken', jsonData.data.login.accessToken);",
+                  "    pm.collectionVariables.set('refreshToken', jsonData.data.login.refreshToken);",
+                  "    console.log('✅ Login successful! Tokens saved.');",
+                  "} else {",
+                  "    console.log('❌ Login failed:', jsonData.data?.login?.message);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"Login\",\n  \"query\": \"mutation Login($username: String!, $password: String!, $platform: String!, $deviceName: String!) { login(username: $username, password: $password, platform: $platform, deviceName: $deviceName) { success accessToken refreshToken user { id username email } } }\",\n  \"variables\": {\n    \"username\": \"testuser\",\n    \"password\": \"Test@123\",\n    \"platform\": \"web\",\n    \"deviceName\": \"Postman\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"Login\",\n  \"query\": \"mutation Login($username: String!, $password: String!, $platform: String!, $deviceName: String!) { login(username: $username, password: $password, platform: $platform, deviceName: $deviceName) { success message accessToken refreshToken user { id username email emailVerified } } }\",\n  \"variables\": {\n    \"username\": \"testuser\",\n    \"password\": \"Test@123456\",\n    \"platform\": \"web\",\n    \"deviceName\": \"Postman\"\n  }\n}"
             }
           },
           "response": []
@@ -37,7 +70,7 @@
           "name": "3. Get Current User (ME)",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -51,12 +84,28 @@
         },
         {
           "name": "4. Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const jsonData = pm.response.json();",
+                  "if (jsonData.data?.refreshToken?.success) {",
+                  "    pm.collectionVariables.set('accessToken', jsonData.data.refreshToken.accessToken);",
+                  "    pm.collectionVariables.set('refreshToken', jsonData.data.refreshToken.refreshToken);",
+                  "    console.log('✅ Tokens refreshed!');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"RefreshToken\",\n  \"query\": \"mutation RefreshToken($refreshToken: String!, $platform: String!) { refreshToken(refreshToken: $refreshToken, platform: $platform) { success accessToken refreshToken } }\",\n  \"variables\": {\n    \"refreshToken\": \"{{refreshToken}}\",\n    \"platform\": \"web\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"RefreshToken\",\n  \"query\": \"mutation RefreshToken($refreshToken: String!, $platform: String!) { refreshToken(refreshToken: $refreshToken, platform: $platform) { success message accessToken refreshToken } }\",\n  \"variables\": {\n    \"refreshToken\": \"{{refreshToken}}\",\n    \"platform\": \"web\"\n  }\n}"
             }
           },
           "response": []
@@ -65,14 +114,30 @@
           "name": "5. Logout",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"Logout\",\n  \"query\": \"mutation Logout($refreshToken: String!) { logout(refreshToken: $refreshToken) { success message } }\",\n  \"variables\": {\n    \"refreshToken\": \"{{refreshToken}}\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"Logout\",\n  \"query\": \"mutation Logout($refreshToken: String!, $allDevices: Boolean) { logout(refreshToken: $refreshToken, allDevices: $allDevices) { success message count } }\",\n  \"variables\": {\n    \"refreshToken\": \"{{refreshToken}}\",\n    \"allDevices\": false\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "5b. Logout All Devices",
+          "request": {
+            "method": "POST",
+            "url": "http://localhost:8001/graphql/",
+            "auth": {
+              "type": "bearer",
+              "bearer": ["{{accessToken}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"operationName\": \"LogoutAll\",\n  \"query\": \"mutation LogoutAll($refreshToken: String!, $allDevices: Boolean) { logout(refreshToken: $refreshToken, allDevices: $allDevices) { success message count } }\",\n  \"variables\": {\n    \"refreshToken\": \"{{refreshToken}}\",\n    \"allDevices\": true\n  }\n}"
             }
           },
           "response": []
@@ -81,14 +146,14 @@
           "name": "6. Change Password",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"ChangePassword\",\n  \"query\": \"mutation ChangePassword($oldPassword: String!, $newPassword: String!) { changePassword(oldPassword: $oldPassword, newPassword: $newPassword) { success message } }\",\n  \"variables\": {\n    \"oldPassword\": \"Test@123\",\n    \"newPassword\": \"NewPass@123\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"ChangePassword\",\n  \"query\": \"mutation ChangePassword($oldPassword: String!, $newPassword: String!) { changePassword(oldPassword: $oldPassword, newPassword: $newPassword) { success message } }\",\n  \"variables\": {\n    \"oldPassword\": \"Test@123456\",\n    \"newPassword\": \"NewPass@123456\"\n  }\n}"
             }
           },
           "response": []
@@ -97,7 +162,7 @@
           "name": "7. Get My Devices",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -113,7 +178,7 @@
           "name": "8. Remove Device",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -129,7 +194,7 @@
           "name": "9. Remove Other Devices",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -142,17 +207,17 @@
           "response": []
         },
         {
-          "name": "10. Get My Sessions",
+          "name": "10. Get My Sessions (Redis)",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"GetMySessions\",\n  \"query\": \"query GetMySessions { mySessions { deviceId platform createdAt lastAccessed expiresAt } }\"\n}"
+              "raw": "{\n  \"operationName\": \"GetMySessions\",\n  \"query\": \"query GetMySessions { mySessions { deviceId platform deviceName ipAddress createdAt } }\"\n}"
             }
           },
           "response": []
@@ -161,7 +226,7 @@
           "name": "11. Verify Email",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationName\": \"VerifyEmail\",\n  \"query\": \"mutation VerifyEmail($uidb64: String!, $token: String!) { verifyEmail(uidb64: $uidb64, token: $token) { success message } }\",\n  \"variables\": {\n    \"uidb64\": \"YOUR_UID\",\n    \"token\": \"YOUR_TOKEN\"\n  }\n}"
@@ -173,10 +238,10 @@
           "name": "12. Request Password Reset",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"PasswordResetRequest\",\n  \"query\": \"mutation PasswordResetRequest($email: String!) { passwordResetRequest(email: $email) { success message } }\",\n  \"variables\": {\n    \"email\": \"test@test.com\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"PasswordResetRequest\",\n  \"query\": \"mutation PasswordResetRequest($email: String!) { passwordResetRequest(email: $email) { success message } }\",\n  \"variables\": {\n    \"email\": \"test@example.com\"\n  }\n}"
             }
           },
           "response": []
@@ -185,10 +250,22 @@
           "name": "13. Set New Password",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/auth/",
+            "url": "http://localhost:8001/graphql/",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"SetNewPassword\",\n  \"query\": \"mutation SetNewPassword($uidb64: String!, $token: String!, $newPassword: String!) { setNewPassword(uidb64: $uidb64, token: $token, newPassword: $newPassword) { success message } }\",\n  \"variables\": {\n    \"uidb64\": \"YOUR_UID\",\n    \"token\": \"YOUR_TOKEN\",\n    \"newPassword\": \"NewPass@123\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"SetNewPassword\",\n  \"query\": \"mutation SetNewPassword($uidb64: String!, $token: String!, $newPassword: String!) { setNewPassword(uidb64: $uidb64, token: $token, newPassword: $newPassword) { success message } }\",\n  \"variables\": {\n    \"uidb64\": \"YOUR_UID\",\n    \"token\": \"YOUR_TOKEN\",\n    \"newPassword\": \"NewPass@123456\"\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "14. Test Hello Query",
+          "request": {
+            "method": "POST",
+            "url": "http://localhost:8001/graphql/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"{ hello }\"\n}"
             }
           },
           "response": []
@@ -197,61 +274,29 @@
     },
     {
       "name": "Blog Service",
-      "description": "Blog Post Management",
+      "description": "Blog Post Management with MongoDB",
       "item": [
         {
           "name": "1. Create Upload (Without Image)",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operationName\": \"CreateUpload\",\n  \"query\": \"mutation CreateUpload($title: String!, $description: String!) { createUpload(title: $title, description: $description) { success message upload { id title description createdAt } } }\",\n  \"variables\": {\n    \"title\": \"My First Blog\",\n    \"description\": \"Hello World\"\n  }\n}"
+              "raw": "{\n  \"operationName\": \"CreateUpload\",\n  \"query\": \"mutation CreateUpload($title: String!, $description: String!) { createUpload(title: $title, description: $description) { success message upload { id title description createdAt } } }\",\n  \"variables\": {\n    \"title\": \"My First Blog\",\n    \"description\": \"Hello World from GraphQL!\"\n  }\n}"
             }
           },
           "response": []
         },
         {
-          "name": "2. Create Upload (With Image)",
+          "name": "2. Get All Uploads",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
-            "auth": {
-              "type": "bearer",
-              "bearer": ["{{accessToken}}"]
-            },
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "operations",
-                  "value": "{\"operationName\":\"CreateUpload\",\"query\":\"mutation CreateUpload($title: String!, $description: String!, $file: Upload!) { createUpload(title: $title, description: $description, uploadedImages: [$file]) { success message upload { id title images } } }\",\"variables\":{\"title\":\"Blog with Image\",\"description\":\"This post has an image\",\"file\":null}}",
-                  "type": "text"
-                },
-                {
-                  "key": "map",
-                  "value": "{\"0\":[\"variables.file\"]}",
-                  "type": "text"
-                },
-                {
-                  "key": "0",
-                  "type": "file",
-                  "src": "/path/to/your/image.jpg"
-                }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "3. Get All Uploads",
-          "request": {
-            "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationName\": \"GetAllUploads\",\n  \"query\": \"query GetAllUploads { allUploads { id title description images createdAt } }\"\n}"
@@ -260,10 +305,10 @@
           "response": []
         },
         {
-          "name": "4. Get Single Upload",
+          "name": "3. Get Single Upload",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"operationName\": \"GetUpload\",\n  \"query\": \"query GetUpload($id: String!) { upload(id: $id) { id title description images createdAt } }\",\n  \"variables\": {\n    \"id\": \"UPLOAD_ID_HERE\"\n  }\n}"
@@ -272,10 +317,10 @@
           "response": []
         },
         {
-          "name": "5. Get My Uploads",
+          "name": "4. Get My Uploads",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -288,10 +333,10 @@
           "response": []
         },
         {
-          "name": "6. Update Upload",
+          "name": "5. Update Upload",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
@@ -304,10 +349,10 @@
           "response": []
         },
         {
-          "name": "7. Delete Upload",
+          "name": "6. Delete Upload",
           "request": {
             "method": "POST",
-            "url": "http://localhost:8000/graphql/blog/",
+            "url": "http://localhost:8002/graphql/",
             "auth": {
               "type": "bearer",
               "bearer": ["{{accessToken}}"]
