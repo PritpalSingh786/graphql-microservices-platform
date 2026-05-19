@@ -47,7 +47,9 @@ class AuthConsumer(AsyncWebsocketConsumer):
             )
     
     async def session_killed(self, event):
+        """Handle session killed events from Redis manager"""
         await self.send(text_data=json.dumps({
             "type": "SESSION_KILLED",
-            "message": event.get("message", "Your session has been terminated")
+            "message": event.get("message", "Your session has been terminated"),
+            "reason": event.get("reason", "unknown")
         }))

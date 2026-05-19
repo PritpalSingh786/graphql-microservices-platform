@@ -10,6 +10,8 @@ class Query(graphene.ObjectType):
     my_devices = graphene.List(DeviceType)
     my_sessions = graphene.List(SessionType)
     user = graphene.Field(UserType, id=graphene.ID(required=True))
+    active_sessions_count = graphene.Int()
+    all_active_sessions = graphene.List(SessionType)
     
     def resolve_hello(self, info):
         return "Welcome to GraphQL Auth API with Pure JWT + Redis!"
@@ -30,12 +32,38 @@ class Query(graphene.ObjectType):
         return Device.objects.filter(user_id=user_id)
     
     def resolve_my_sessions(self, info):
+        """Returns Redis-based active tokens/sessions"""
         user_id = info.context.META.get('HTTP_X_USER_ID', '')
         if not user_id:
             return []
         try:
             user = User.objects.get(id=user_id)
             # Returns Redis-based active tokens
+            active_sessions = get_active_tokens(user)
+            print(f"User {user.username} has {len(active_sessions)} active sessions")
+            return active_sessions
+        except User.DoesNotExist:
+            return []
+    
+    def resolve_active_sessions_count(self, info):
+        """Returns count of active sessions"""
+        user_id = info.context.META.get('HTTP_X_USER_ID', '')
+        if not user_id:
+            return 0
+        try:
+            user = User.objects.get(id=user_id)
+            active_sessions = get_active_tokens(user)
+            return len(active_sessions)
+        except User.DoesNotExist:
+            return 0
+    
+    def resolve_all_active_sessions(self, info):
+        """Returns all active sessions with details"""
+        user_id = info.context.META.get('HTTP_X_USER_ID', '')
+        if not user_id:
+            return []
+        try:
+            user = User.objects.get(id=user_id)
             return get_active_tokens(user)
         except User.DoesNotExist:
             return []

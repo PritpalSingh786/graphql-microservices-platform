@@ -69,10 +69,26 @@ class RedisTokenManager:
                 active_tokens.append(token_data)
         return active_tokens
 
-    def revoke_all_user_tokens(self, user_id, reason="revoked_all"):
+    def get_device_ids_from_user(self, user_id):
+        active_tokens = self.get_user_active_tokens(user_id)
+        device_ids = set()
+        for token in active_tokens:
+            device_id = token.get('device_id')
+            if device_id:
+                device_ids.add(device_id)
+        return device_ids
+
+    def revoke_all_user_tokens(self, user_id, reason="revoked_all", notify_websocket=True):
         jtis = self.redis.smembers(f"user:{user_id}:tokens")
         if not jtis:
             return 0
+        
+        device_ids = set()
+        for jti in jtis:
+            token_data = self.get_refresh_token(jti)
+            if token_data and token_data.get('device_id'):
+                device_ids.add(token_data['device_id'])
+        
         pipe = self.redis.pipeline()
         for jti in jtis:
             ttl = self.redis.ttl(f"rt:{jti}")
@@ -81,21 +97,74 @@ class RedisTokenManager:
             pipe.delete(f"rt:{jti}")
         pipe.delete(f"user:{user_id}:tokens")
         pipe.execute()
+        
+        if notify_websocket:
+            for device_id in device_ids:
+                self._send_websocket_notification(user_id, device_id, f"Session terminated. Reason: {reason}")
+        
         return len(jtis)
+
+    def revoke_specific_device_tokens(self, user_id, device_id, reason="device_removed"):
+        jtis = self.redis.smembers(f"user:{user_id}:tokens")
+        revoked_count = 0
+        
+        for jti in jtis:
+            token_data = self.get_refresh_token(jti)
+            if token_data and token_data.get('device_id') == str(device_id):
+                ttl = self.redis.ttl(f"rt:{jti}")
+                if ttl > 0:
+                    self.redis.setex(f"bl:{jti}", ttl, reason)
+                self.redis.delete(f"rt:{jti}")
+                self.redis.srem(f"user:{user_id}:tokens", jti)
+                revoked_count += 1
+        
+        if revoked_count > 0:
+            self._send_websocket_notification(user_id, device_id, f"Device session terminated. Reason: {reason}")
+        
+        return revoked_count
 
     def limit_user_sessions(self, user_id, max_sessions=5):
         active_tokens = self.get_user_active_tokens(user_id)
         if len(active_tokens) <= max_sessions:
             return 0
+        
         active_tokens.sort(key=lambda x: x.get('created_at', ''))
         tokens_to_revoke = active_tokens[:-max_sessions]
         revoked_count = 0
+        
         for token in tokens_to_revoke:
             jti = token.get('jti')
+            device_id = token.get('device_id')
             if jti:
                 self.blacklist_token(jti, "session_limit_exceeded")
                 self.delete_refresh_token(jti)
                 revoked_count += 1
+                
+                if device_id:
+                    self._send_websocket_notification(
+                        user_id,
+                        device_id,
+                        "Session limit exceeded. Oldest session terminated."
+                    )
+        
         return revoked_count
+
+    def _send_websocket_notification(self, user_id, device_id, message):
+        """Internal method to send WebSocket notification"""
+        try:
+            channel_layer = get_channel_layer()
+            group_name = f"user_{user_id}_{device_id}"
+            
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    "type": "session_killed",
+                    "message": message
+                }
+            )
+            return True
+        except Exception as e:
+            print(f"Error sending WebSocket notification: {e}")
+            return False
 
 redis_token_manager = RedisTokenManager()

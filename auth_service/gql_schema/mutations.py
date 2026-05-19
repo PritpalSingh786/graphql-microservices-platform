@@ -16,13 +16,12 @@ from users.models import Device
 from users.utils import (
     create_access_token, create_refresh_token, verify_token,
     store_refresh_token, limit_user_sessions, blacklist_token_by_value,
-    get_active_tokens, refresh_both_tokens
+    get_active_tokens, refresh_both_tokens, revoke_user_session_by_jti
 )
 from users.redis_token_manager import redis_token_manager
 
 User = get_user_model()
 token_generator = PasswordResetTokenGenerator()
-
 
 def rate_limit(ip, limit=5, window=60, key_prefix="login"):
     key = f"rate_limit_{key_prefix}_{ip}"
@@ -37,7 +36,6 @@ def rate_limit(ip, limit=5, window=60, key_prefix="login"):
     cache.set(key, requests, window)
     return True
 
-
 class RegisterMutation(graphene.Mutation):
     class Arguments:
         username = graphene.String(required=True)
@@ -51,12 +49,9 @@ class RegisterMutation(graphene.Mutation):
         ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
         rate_limit(ip, limit=3, window=60, key_prefix="register")
         
-        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_regex, email):
-            return RegisterMutation(
-                success=False,
-                message="Invalid email format. Example: user@domain.com"
-            )
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            return RegisterMutation(success=False, message="Invalid email format")
+        
         if len(username) < 4:
             return RegisterMutation(success=False, message="Username must be at least 4 characters")
         
@@ -83,7 +78,6 @@ class RegisterMutation(graphene.Mutation):
         send_email_task.delay("Verify Your Email", message, [email])
         
         return RegisterMutation(success=True, message="User registered successfully! Please check your email.")
-
 
 class LoginMutation(graphene.Mutation):
     class Arguments:
@@ -113,7 +107,6 @@ class LoginMutation(graphene.Mutation):
         if not user.email_verified:
             return LoginMutation(success=False, message="Please verify your email first")
         
-        # Get or create device
         device, created = Device.objects.get_or_create(
             user=user,
             device_name=device_name,
@@ -128,28 +121,26 @@ class LoginMutation(graphene.Mutation):
         
         device_id = str(device.device_id)
         
-        # Create tokens using pure PyJWT
         access_token = create_access_token(user, device_id, platform)
         refresh_token = create_refresh_token(user, device_id, platform)
         
-        # Store refresh token in REDIS (not database!)
         store_refresh_token(
             refresh_token, user, device_id, platform,
             device_name=device_name,
             ip_address=info.context.META.get('REMOTE_ADDR', '')
         )
         
-        # Limit sessions using Redis
-        limit_user_sessions(user, max_sessions=5)
+        active_before = len(get_active_tokens(user))
+        revoked_count = limit_user_sessions(user, max_sessions=5)
+        active_after = len(get_active_tokens(user))
         
         return LoginMutation(
             success=True,
-            message="Login successful",
+            message=f"Login successful. Sessions: {active_after}/5 (revoked {revoked_count} old)",
             access_token=access_token,
             refresh_token=refresh_token,
             user=user
         )
-
 
 class VerifyEmailMutation(graphene.Mutation):
     class Arguments:
@@ -176,7 +167,6 @@ class VerifyEmailMutation(graphene.Mutation):
         
         return VerifyEmailMutation(success=False, message="Invalid or expired verification link")
 
-
 class RefreshTokenMutation(graphene.Mutation):
     class Arguments:
         refresh_token = graphene.String(required=True)
@@ -191,16 +181,10 @@ class RefreshTokenMutation(graphene.Mutation):
         ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
         rate_limit(ip, limit=20, window=60, key_prefix="refresh")
         
-        # Verify refresh token (uses Redis blacklist check)
-        payload = verify_token(refresh_token, 'refresh')
-        if not payload:
-            return RefreshTokenMutation(success=False, message="Invalid or expired refresh token")
-        
-        # Rotate tokens (blacklist old in Redis, create new)
         new_access, new_refresh = refresh_both_tokens(refresh_token)
         
         if not new_access:
-            return RefreshTokenMutation(success=False, message="Failed to refresh token")
+            return RefreshTokenMutation(success=False, message="Invalid or expired refresh token")
         
         return RefreshTokenMutation(
             success=True,
@@ -208,7 +192,6 @@ class RefreshTokenMutation(graphene.Mutation):
             access_token=new_access,
             refresh_token=new_refresh
         )
-
 
 class LogoutMutation(graphene.Mutation):
     class Arguments:
@@ -231,21 +214,27 @@ class LogoutMutation(graphene.Mutation):
             raise GraphQLError("User not found")
         
         if all_devices:
-            # Revoke all tokens from Redis
-            count = redis_token_manager.revoke_all_user_tokens(user.id, "logout_all_devices")
+            count = redis_token_manager.revoke_all_user_tokens(user.id, "logout_all_devices", notify_websocket=True)
             return LogoutMutation(
                 success=True,
                 message=f"Logged out from {count} devices",
                 count=count
             )
         else:
+            payload = verify_token(refresh_token, 'refresh')
+            if payload and payload.get('device_id'):
+                redis_token_manager._send_websocket_notification(
+                    user.id,
+                    payload.get('device_id'),
+                    "You have been logged out from this device"
+                )
+            
             blacklist_token_by_value(refresh_token, reason="logout")
             return LogoutMutation(
                 success=True,
                 message="Logged out successfully",
                 count=1
             )
-
 
 class PasswordResetRequestMutation(graphene.Mutation):
     class Arguments:
@@ -273,7 +262,6 @@ class PasswordResetRequestMutation(graphene.Mutation):
         
         return PasswordResetRequestMutation(success=True, message="If account exists, password reset email sent")
 
-
 class SetNewPasswordMutation(graphene.Mutation):
     class Arguments:
         uidb64 = graphene.String(required=True)
@@ -300,13 +288,14 @@ class SetNewPasswordMutation(graphene.Mutation):
             user.set_password(new_password)
             user.save()
             
-            # Revoke all sessions from Redis after password change
-            redis_token_manager.revoke_all_user_tokens(user.id, "password_changed")
+            count = redis_token_manager.revoke_all_user_tokens(user.id, "password_changed", notify_websocket=True)
             
-            return SetNewPasswordMutation(success=True, message="Password reset successful! Please login again.")
+            return SetNewPasswordMutation(
+                success=True,
+                message=f"Password reset successful! {count} sessions terminated. Please login again."
+            )
         
         return SetNewPasswordMutation(success=False, message="Invalid or expired reset link")
-
 
 class ChangePasswordMutation(graphene.Mutation):
     class Arguments:
@@ -336,11 +325,12 @@ class ChangePasswordMutation(graphene.Mutation):
         user.set_password(new_password)
         user.save()
         
-        # Revoke all sessions from Redis after password change
-        redis_token_manager.revoke_all_user_tokens(user.id, "password_changed")
+        count = redis_token_manager.revoke_all_user_tokens(user.id, "password_changed", notify_websocket=True)
         
-        return ChangePasswordMutation(success=True, message="Password changed successfully! Please login again.")
-
+        return ChangePasswordMutation(
+            success=True,
+            message=f"Password changed successfully! {count} sessions terminated. Please login again."
+        )
 
 class RemoveDeviceMutation(graphene.Mutation):
     class Arguments:
@@ -361,14 +351,14 @@ class RemoveDeviceMutation(graphene.Mutation):
         except (User.DoesNotExist, Device.DoesNotExist):
             raise GraphQLError("Device not found")
         
-        # Revoke device tokens from Redis
-        redis_token_manager.revoke_all_user_tokens(user.id, f"remove_device_{device_id}")
+        count = redis_token_manager.revoke_specific_device_tokens(user.id, device_id, f"device_removed_{device.device_name}")
         
-        # Delete device record
         device.delete()
         
-        return RemoveDeviceMutation(success=True, message="Device removed successfully")
-
+        return RemoveDeviceMutation(
+            success=True,
+            message=f"Device removed successfully. {count} sessions terminated."
+        )
 
 class RemoveOtherDevicesMutation(graphene.Mutation):
     success = graphene.Boolean()
@@ -392,14 +382,15 @@ class RemoveOtherDevicesMutation(graphene.Mutation):
         if current_device_id:
             devices = devices.exclude(device_id=current_device_id)
         
-        count = devices.count()
-        
+        removed_count = 0
         for device in devices:
-            redis_token_manager.revoke_all_user_tokens(user.id, f"remove_other_devices_{device.device_id}")
+            count = redis_token_manager.revoke_specific_device_tokens(user.id, device.device_id, "device_removed_admin")
+            if count > 0:
+                removed_count += 1
             device.delete()
         
         return RemoveOtherDevicesMutation(
             success=True,
-            message=f"Removed {count} other devices",
-            count=count
+            message=f"Removed {removed_count} other devices",
+            count=removed_count
         )

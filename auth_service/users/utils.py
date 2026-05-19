@@ -4,11 +4,10 @@ from datetime import datetime, timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from .redis_token_manager import redis_token_manager
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 
 User = get_user_model()
 
+# ============ TOKEN CREATION ============
 
 def create_access_token(user, device_id=None, platform="web"):
     """Create access token using pure PyJWT"""
@@ -24,13 +23,7 @@ def create_access_token(user, device_id=None, platform="web"):
         'jti': str(uuid.uuid4())
     }
     
-    token = jwt.encode(
-        payload,
-        settings.SECRET_KEY,
-        algorithm=settings.JWT_ALGORITHM
-    )
-    return token
-
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 def create_refresh_token(user, device_id=None, platform="web"):
     """Create refresh token using pure PyJWT"""
@@ -46,13 +39,9 @@ def create_refresh_token(user, device_id=None, platform="web"):
         'jti': str(uuid.uuid4())
     }
     
-    token = jwt.encode(
-        payload,
-        settings.SECRET_KEY,
-        algorithm=settings.JWT_ALGORITHM
-    )
-    return token
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
+# ============ TOKEN VERIFICATION ============
 
 def verify_token(token, token_type='access'):
     """Verify and decode JWT token - Uses Redis for blacklist check"""
@@ -69,7 +58,6 @@ def verify_token(token, token_type='access'):
         if payload.get('type') != token_type:
             return None
         
-        # Redis blacklist check - O(1) operation!
         if redis_token_manager.is_blacklisted(payload.get('jti')):
             return None
         
@@ -81,14 +69,11 @@ def verify_token(token, token_type='access'):
         
         return payload
         
-    except jwt.ExpiredSignatureError:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
-    except jwt.InvalidTokenError:
-        return None
-
 
 async def averify_token(token, token_type='access'):
-    """Verify and decode JWT token - Async version (for WebSocket)"""
+    """Async version for WebSocket"""
     try:
         payload = jwt.decode(
             token,
@@ -104,7 +89,6 @@ async def averify_token(token, token_type='access'):
         
         from asgiref.sync import sync_to_async
         
-        # Async Redis blacklist check
         if await sync_to_async(redis_token_manager.is_blacklisted)(payload.get('jti')):
             return None
         
@@ -120,9 +104,10 @@ async def averify_token(token, token_type='access'):
     except:
         return None
 
+# ============ TOKEN STORAGE ============
 
 def store_refresh_token(refresh_token_str, user, device_id=None, platform="web", device_name="", ip_address=""):
-    """Store refresh token in Redis (not database!)"""
+    """Store refresh token in Redis"""
     try:
         payload = jwt.decode(
             refresh_token_str,
@@ -146,16 +131,7 @@ def store_refresh_token(refresh_token_str, user, device_id=None, platform="web",
         print(f"Error storing token in Redis: {e}")
         return False
 
-
-def is_token_blacklisted(jti):
-    """Check if token is blacklisted - Redis O(1)"""
-    return redis_token_manager.is_blacklisted(jti)
-
-
-def blacklist_token(jti, reason=None):
-    """Blacklist token in Redis"""
-    return redis_token_manager.blacklist_token(jti, reason or "revoked")
-
+# ============ BLACKLIST OPERATIONS ============
 
 def blacklist_token_by_value(token_str, reason=None):
     """Blacklist token by value"""
@@ -173,25 +149,23 @@ def blacklist_token_by_value(token_str, reason=None):
         pass
     return False
 
+# ============ SESSION MANAGEMENT ============
 
 def get_active_tokens(user):
     """Get all active tokens for user from Redis"""
     return redis_token_manager.get_user_active_tokens(user.id)
 
-
 def limit_user_sessions(user, max_sessions=5):
-    """Limit number of active sessions using Redis"""
+    """Limit number of active sessions"""
     return redis_token_manager.limit_user_sessions(user.id, max_sessions)
 
-
 def refresh_both_tokens(refresh_token_str):
-    """Generate new access and refresh tokens (rotate)"""
+    """Generate new access and refresh tokens (rotation)"""
     payload = verify_token(refresh_token_str, 'refresh')
     
     if not payload:
         return None, None
     
-    # Blacklist old refresh token in Redis
     blacklist_token_by_value(refresh_token_str, reason="rotated")
     
     try:
@@ -199,23 +173,32 @@ def refresh_both_tokens(refresh_token_str):
         device_id = payload.get('device_id')
         platform = payload.get('platform')
         
-        # Create new tokens
         new_access = create_access_token(user, device_id, platform)
         new_refresh = create_refresh_token(user, device_id, platform)
         
-        # Store new refresh token in Redis
         store_refresh_token(new_refresh, user, device_id, platform)
         
         return new_access, new_refresh
     except User.DoesNotExist:
         return None, None
 
-
-def logout_from_device(user, device_id):
-    """Logout from a specific device"""
-    return redis_token_manager.revoke_all_user_tokens(user.id, f"logout_device_{device_id}")
-
-
-def clean_expired_tokens():
-    """Redis handles this automatically - function kept for compatibility"""
-    return 0
+def revoke_user_session_by_jti(jti, reason="revoked"):
+    """Revoke a specific session by its JTI"""
+    try:
+        token_data = redis_token_manager.get_refresh_token(jti)
+        if token_data:
+            user_id = token_data.get('user_id')
+            device_id = token_data.get('device_id')
+            
+            redis_token_manager.blacklist_token(jti, reason)
+            redis_token_manager.delete_refresh_token(jti)
+            
+            if device_id:
+                redis_token_manager._send_websocket_notification(
+                    user_id, device_id, f"Session terminated. Reason: {reason}"
+                )
+            return True
+        return False
+    except Exception as e:
+        print(f"Error revoking session: {e}")
+        return False
