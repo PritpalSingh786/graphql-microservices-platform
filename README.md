@@ -4,6 +4,9 @@ A GraphQL-based microservices platform built using Django, Graphene, Redis, and 
 
 The project demonstrates JWT authentication workflows, Redis-backed token/session management, GraphQL APIs, WebSocket communication, file upload handling, and Docker-based service orchestration across multiple backend services.
 
+🎥 **Project Video Demo:**
+[Watch Demo Video](https://youtu.be/wsrD0QHIrLY?utm_source=chatgpt.com)
+
 ---
 
 # 📖 Overview
@@ -20,6 +23,7 @@ Key areas covered:
 * Docker Compose-based multi-service setup
 * PostgreSQL and MongoDB integration
 * Asynchronous background tasks using Celery
+* Docker base image optimization for consistent and lightweight containerized deployments
 
 ---
 
@@ -314,6 +318,31 @@ ws://localhost:8001/ws/auth/?token=<access_token>
 
 ---
 
+# 🐳 Docker & Base Image Usage
+
+This project uses Dockerized services with custom Docker base images to provide a consistent and isolated development environment across all microservices.
+
+Benefits of using Docker base images in this project:
+
+* Consistent runtime environment across all services
+* Faster onboarding and setup process
+* Simplified dependency management
+* Lightweight and reproducible containers
+* Easier deployment and scalability
+* Improved development-to-production consistency
+* Better microservices orchestration using Docker Compose
+
+Docker Compose is used to manage:
+
+* API Gateway
+* Auth Service
+* Blog Service
+* Redis
+* PostgreSQL
+* MongoDB
+
+---
+
 # 🛠️ Tech Stack
 
 | Category            | Technology      |
@@ -484,6 +513,7 @@ python manage.py test
 * Redis-backed token/session handling
 * WebSocket communication
 * Docker-based service orchestration
+* Docker base image optimization
 * PostgreSQL & MongoDB integration
 * Async task processing using Celery
 * Device/session management workflows
