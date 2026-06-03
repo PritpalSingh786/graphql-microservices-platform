@@ -30,7 +30,7 @@ from users.tasks import (
     logout_all_devices_task,
     send_forgot_password_email_task
 )
-from .types import UserType
+from .types import LoginResultType, TokenResultType, LogoutResultType, PasswordChangeResultType, UserType
 
 User = get_user_model()
 redis_client = settings.REDIS_CLIENT
