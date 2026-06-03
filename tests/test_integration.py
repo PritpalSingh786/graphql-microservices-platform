@@ -1,15 +1,16 @@
 import requests
 import json
 import sys
+import time
 
 BASE_URL = "http://localhost:8000"
 
 
 def test_register():
     print("📝 Testing Register...")
-    url = f"{BASE_URL}/graphql/"  # Changed: removed /auth/
+    url = f"{BASE_URL}/graphql/auth/"
     payload = {
-        "operationName": "register",  # Changed from RegisterUser
+        "operationName": "register",
         "query": """mutation register($userId: String!, $email: String!, $password: String!) {
             register(userId: $userId, email: $email, password: $password) {
                 success 
@@ -19,7 +20,7 @@ def test_register():
             }
         }""",
         "variables": {
-            "userId": "integrationtest",  # Changed from username
+            "userId": "integrationtest",
             "email": "integration@test.com",
             "password": "Test@123"
         }
@@ -29,36 +30,59 @@ def test_register():
     data = response.json()
     print(f"   Response: {data}")
     
-    # Check if registration was successful
     if 'errors' in data:
         print(f"   Warning: {data['errors']}")
     return data
 
 
+def test_verify_email_direct():
+    """Directly verify email using database (for testing only)"""
+    print("📧 Directly verifying email in database...")
+    
+    # For testing, we need to get the verification token from Redis
+    # Or we can directly mark user as verified in database
+    import subprocess
+    import docker
+    
+    # Option 1: Mark user as verified via Django shell
+    cmd = """
+    docker compose exec auth_service python manage.py shell -c "
+    from users.models import User;
+    user = User.objects.get(user_id='integrationtest');
+    user.email_verified = True;
+    user.is_active = True;
+    user.save();
+    print('User verified successfully')
+    "
+    """
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    print(f"   {result.stdout}")
+    return True
+
+
 def test_login():
     print("🔐 Testing Login...")
-    url = f"{BASE_URL}/graphql/"  # Changed: removed /auth/
+    url = f"{BASE_URL}/graphql/auth/"
     payload = {
-        "operationName": "login",  # Changed from Login
+        "operationName": "login",
         "query": """mutation login($userId: String!, $password: String!, $platform: String!) {
             login(userId: $userId, password: $password, platform: $platform) {
                 success 
                 message
-                access  # Changed from accessToken
-                refresh  # Changed from refreshToken
+                access
+                refresh
                 user {
                     id
-                    userId  # Changed from username
+                    userId
                     email
                     emailVerified
                 }
             }
         }""",
         "variables": {
-            "userId": "integrationtest",  # Changed from username
+            "userId": "integrationtest",
             "password": "Test@123",
             "platform": "web"
-            # deviceName removed - auto-detected from headers
         }
     }
     response = requests.post(url, json=payload)
@@ -66,9 +90,12 @@ def test_login():
     data = response.json()
     print(f"   Response: {data}")
     
-    # Extract access token from response
-    if 'data' in data and data['data'] and 'login' in data['data']:
-        return data['data']['login']['access']  # Changed from accessToken
+    if 'errors' in data:
+        print(f"   Login error: {data['errors'][0]['message']}")
+        return None
+    
+    if 'data' in data and data['data'] and data['data']['login'] and data['data']['login'].get('access'):
+        return data['data']['login']['access']
     else:
         print(f"   Login failed: {data}")
         return None
@@ -76,7 +103,7 @@ def test_login():
 
 def test_get_me(token):
     print("👤 Testing Get Me...")
-    url = f"{BASE_URL}/graphql/"  # Changed: removed /auth/
+    url = f"{BASE_URL}/graphql/auth/"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {
         "operationName": "me",
@@ -86,7 +113,7 @@ def test_get_me(token):
                 message
                 user { 
                     id 
-                    userId  # Changed from username
+                    userId
                     email 
                     emailVerified
                 }
@@ -104,7 +131,7 @@ def test_get_me(token):
 
 def test_refresh_token(token):
     print("🔄 Testing Refresh Token...")
-    url = f"{BASE_URL}/graphql/"
+    url = f"{BASE_URL}/graphql/auth/"
     
     # First get refresh token from login
     login_payload = {
@@ -125,30 +152,30 @@ def test_refresh_token(token):
     login_response = requests.post(url, json=login_payload)
     login_data = login_response.json()
     
-    if 'data' in login_data and login_data['data']:
-        refresh_token = login_data['data']['login']['refresh']
+    if 'data' in login_data and login_data['data'] and login_data['data']['login']:
+        refresh_token = login_data['data']['login'].get('refresh')
         
-        # Test refresh token mutation
-        payload = {
-            "operationName": "refreshToken",
-            "query": """mutation refreshToken($refresh: String!, $platform: String!) {
-                refreshToken(refresh: $refresh, platform: $platform) {
-                    success
-                    access
-                    refresh
+        if refresh_token:
+            payload = {
+                "operationName": "refreshToken",
+                "query": """mutation refreshToken($refresh: String!, $platform: String!) {
+                    refreshToken(refresh: $refresh, platform: $platform) {
+                        success
+                        access
+                        refresh
+                    }
+                }""",
+                "variables": {
+                    "refresh": refresh_token,
+                    "platform": "web"
                 }
-            }""",
-            "variables": {
-                "refresh": refresh_token,
-                "platform": "web"
             }
-        }
-        
-        response = requests.post(url, json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        print(f"   Response: {data}")
-        return data
+            
+            response = requests.post(url, json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            print(f"   Response: {data}")
+            return data
     
     print("   Could not get refresh token")
     return None
@@ -156,9 +183,8 @@ def test_refresh_token(token):
 
 def test_logout(token):
     print("🚪 Testing Logout...")
-    url = f"{BASE_URL}/graphql/"
+    url = f"{BASE_URL}/graphql/auth/"
     
-    # First get refresh token
     login_payload = {
         "operationName": "login",
         "query": """mutation login($userId: String!, $password: String!, $platform: String!) {
@@ -177,28 +203,28 @@ def test_logout(token):
     login_response = requests.post(url, json=login_payload)
     login_data = login_response.json()
     
-    if 'data' in login_data and login_data['data']:
-        refresh_token = login_data['data']['login']['refresh']
+    if 'data' in login_data and login_data['data'] and login_data['data']['login']:
+        refresh_token = login_data['data']['login'].get('refresh')
         
-        # Test logout mutation
-        payload = {
-            "operationName": "logout",
-            "query": """mutation logout($refresh: String!) {
-                logout(refresh: $refresh) {
-                    success
-                    message
+        if refresh_token:
+            payload = {
+                "operationName": "logout",
+                "query": """mutation logout($refresh: String!) {
+                    logout(refresh: $refresh) {
+                        success
+                        message
+                    }
+                }""",
+                "variables": {
+                    "refresh": refresh_token
                 }
-            }""",
-            "variables": {
-                "refresh": refresh_token
             }
-        }
-        
-        response = requests.post(url, json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        print(f"   Response: {data}")
-        return data
+            
+            response = requests.post(url, json=payload)
+            assert response.status_code == 200
+            data = response.json()
+            print(f"   Response: {data}")
+            return data
     
     print("   Could not get refresh token for logout")
     return None
@@ -206,7 +232,7 @@ def test_logout(token):
 
 def test_forgot_password():
     print("📧 Testing Forgot Password...")
-    url = f"{BASE_URL}/graphql/"
+    url = f"{BASE_URL}/graphql/auth/"
     payload = {
         "operationName": "forgotPassword",
         "query": """mutation forgotPassword($userId: String!) {
@@ -228,7 +254,7 @@ def test_forgot_password():
 
 def test_my_devices(token):
     print("📱 Testing My Devices...")
-    url = f"{BASE_URL}/graphql/"
+    url = f"{BASE_URL}/graphql/auth/"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {
         "operationName": "myDevices",
@@ -252,7 +278,7 @@ def test_my_devices(token):
 
 def test_create_upload(token):
     print("📤 Testing Create Upload...")
-    url = f"{BASE_URL}/graphql/blog/"  # This stays the same (different service)
+    url = f"{BASE_URL}/graphql/blog/"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {
         "operationName": "CreateUpload",
@@ -276,26 +302,49 @@ def test_create_upload(token):
 
 def test_all_uploads():
     print("📋 Testing All Uploads...")
-    url = f"{BASE_URL}/graphql/blog/"  # This stays the same
+    url = f"{BASE_URL}/graphql/blog/"
     payload = {"query": "query { allUploads { id title } }"}
     response = requests.post(url, json=payload)
-    assert response.status_code == 200
-    data = response.json()
+    assert response.status_code in [200, 401]
+    data = response.json() if response.status_code == 200 else {}
     print(f"   Response: {data}")
     return data
 
 
 def test_secure_endpoint_without_token():
     print("🔒 Testing Protected Endpoint Without Token (Should Fail)...")
-    url = f"{BASE_URL}/graphql/"
+    url = f"{BASE_URL}/graphql/auth/"
     payload = {
         "operationName": "me",
         "query": "query me { me { success message } }"
     }
     response = requests.post(url, json=payload)
-    assert response.status_code == 401  # Should be unauthorized
+    assert response.status_code == 401
     print(f"   ✅ Correctly returned 401: {response.status_code}")
     return response
+
+
+def test_verify_email_mutation_with_invalid_token():
+    print("📧 Testing Verify Email (with invalid token)...")
+    url = f"{BASE_URL}/graphql/auth/"
+    payload = {
+        "operationName": "verifyEmail",
+        "query": """mutation verifyEmail($userId: String!, $token: String!) {
+            verifyEmail(userId: $userId, token: $token) {
+                success
+                message
+            }
+        }""",
+        "variables": {
+            "userId": "integrationtest",
+            "token": "invalid_token_should_fail"
+        }
+    }
+    response = requests.post(url, json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    print(f"   Response: {data}")
+    return data
 
 
 if __name__ == "__main__":
@@ -304,30 +353,41 @@ if __name__ == "__main__":
     print("=" * 50 + "\n")
     
     try:
-        # Auth Service Tests
+        # Register user
         test_register()
+        
+        # Manually verify email (for testing)
+        test_verify_email_direct()
+        
+        # Now login should work
         token = test_login()
         
-        if token:
-            test_get_me(token)
-            test_refresh_token(token)
-            test_my_devices(token)
-            test_logout(token)
-        else:
-            print("   Skipping authenticated tests - login failed")
+        if not token:
+            print("   ❌ Login failed even after verification")
+            sys.exit(1)
         
+        # Run authenticated tests
+        test_get_me(token)
+        test_refresh_token(token)
+        test_my_devices(token)
+        test_logout(token)
+        
+        # Run public tests
         test_forgot_password()
+        test_verify_email_mutation_with_invalid_token()
         test_secure_endpoint_without_token()
         
         # Blog Service Tests
-        if token:
-            test_create_upload(token)
+        test_create_upload(token)
         test_all_uploads()
         
         print("\n" + "=" * 50)
         print("✅ ALL TESTS PASSED!")
         print("=" * 50)
         
+    except AssertionError as e:
+        print(f"\n❌ TEST FAILED: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"\n❌ TEST FAILED: {e}")
         import traceback

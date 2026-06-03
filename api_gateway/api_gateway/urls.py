@@ -5,4 +5,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('graphql/auth/', include('apps.auth_gateway.urls')),
     path('graphql/blog/', include('apps.blog_gateway.urls')),
+    
 ]
