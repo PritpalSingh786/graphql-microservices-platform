@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import redis 
 
 load_dotenv()
 
@@ -49,7 +50,7 @@ ROOT_URLCONF = 'auth_service.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [os.path.join(BASE_DIR, 'templates')],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -112,6 +113,11 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 # Redis URL (Single source of truth)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+REDIS_CLIENT = redis.from_url(
+    REDIS_URL,
+    decode_responses=True
+)
+
 # Celery Settings
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
@@ -152,6 +158,7 @@ GRAPHENE = {
 }
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+DOMAIN_URL = "http://localhost:8001"
 
 if os.getenv('ENVIRONMENT') == 'production':
     # Production: no patch, use ALLOWED_HOSTS

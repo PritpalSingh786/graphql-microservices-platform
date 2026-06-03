@@ -1,75 +1,88 @@
 import graphene
-from users.models import User, Device
-from users.utils import get_active_tokens
-from .types import UserType, DeviceType, SessionType
+from graphql import GraphQLError
+from django.contrib.auth import get_user_model
+from .types import UserType, DeviceType, AuthenticatedUserType
+
+User = get_user_model()
 
 
 class Query(graphene.ObjectType):
-    hello = graphene.String()
-    me = graphene.Field(UserType)
+    # Authenticated queries
+    me = graphene.Field(AuthenticatedUserType)
     my_devices = graphene.List(DeviceType)
-    my_sessions = graphene.List(SessionType)
-    user = graphene.Field(UserType, id=graphene.ID(required=True))
-    active_sessions_count = graphene.Int()
-    all_active_sessions = graphene.List(SessionType)
-    
-    def resolve_hello(self, info):
-        return "Welcome to GraphQL Auth API with Pure JWT + Redis!"
-    
+    get_user = graphene.Field(
+        UserType,
+        user_id=graphene.String(required=True)
+    )
+
     def resolve_me(self, info):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        if not user_id:
-            return None
-        try:
-            return User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return None
-    
+        user = info.context.user
+
+        if not user or not user.is_authenticated:
+            raise GraphQLError("Authentication required")
+
+        device_id = getattr(info.context, "device_id", None)
+        platform = getattr(info.context, "platform", None)
+
+        return AuthenticatedUserType(
+            success=True,
+            message="Authenticated user",
+            user=UserType(
+                id=user.id,
+                user_id=user.user_id,
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email_verified=user.email_verified,
+                is_active=user.is_active,
+                date_joined=user.date_joined,
+                last_login=user.last_login,
+            ),
+            device_id=device_id,
+            platform=platform,
+        )
+
     def resolve_my_devices(self, info):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        if not user_id:
-            return []
-        return Device.objects.filter(user_id=user_id)
-    
-    def resolve_my_sessions(self, info):
-        """Returns Redis-based active tokens/sessions"""
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        if not user_id:
-            return []
+        user = info.context.user
+
+        if not user or not user.is_authenticated:
+            raise GraphQLError("Authentication required")
+
+        devices = user.devices.filter(is_active=True)
+
+        return [
+            DeviceType(
+                id=device.id,
+                device_name=device.device_name,
+                device_id=str(device.device_id),
+                last_login=device.last_login,
+                ip_address=device.ip_address,
+                user_agent=device.user_agent,
+                is_active=device.is_active,
+            )
+            for device in devices
+        ]
+
+    def resolve_get_user(self, info, user_id):
+        user = info.context.user
+
+        if not user or not user.is_authenticated:
+            raise GraphQLError("Authentication required")
+
         try:
-            user = User.objects.get(id=user_id)
-            # Returns Redis-based active tokens
-            active_sessions = get_active_tokens(user)
-            print(f"User {user.username} has {len(active_sessions)} active sessions")
-            return active_sessions
+            user_obj = User.objects.get(user_id=user_id)
+
+            return UserType(
+                id=user_obj.id,
+                user_id=user_obj.user_id,
+                email=user_obj.email,
+                first_name=user_obj.first_name,
+                last_name=user_obj.last_name,
+                email_verified=user_obj.email_verified,
+                is_active=user_obj.is_active,
+                date_joined=user_obj.date_joined,
+                last_login=user_obj.last_login,
+            )
+
         except User.DoesNotExist:
-            return []
-    
-    def resolve_active_sessions_count(self, info):
-        """Returns count of active sessions"""
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        if not user_id:
-            return 0
-        try:
-            user = User.objects.get(id=user_id)
-            active_sessions = get_active_tokens(user)
-            return len(active_sessions)
-        except User.DoesNotExist:
-            return 0
-    
-    def resolve_all_active_sessions(self, info):
-        """Returns all active sessions with details"""
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        if not user_id:
-            return []
-        try:
-            user = User.objects.get(id=user_id)
-            return get_active_tokens(user)
-        except User.DoesNotExist:
-            return []
-    
-    def resolve_user(self, info, id):
-        try:
-            return User.objects.get(id=id)
-        except User.DoesNotExist:
-            return None
+            raise GraphQLError("User not found")

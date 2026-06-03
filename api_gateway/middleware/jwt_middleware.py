@@ -8,11 +8,18 @@ from django.utils.deprecation import MiddlewareMixin
 # Public GraphQL operations (no auth required)
 PUBLIC_OPERATIONS = [
     'register',
-    'login',
+    'login', 
     'verifyEmail',
-    'passwordResetRequest',
-    'setNewPassword',
-    'refreshToken'
+    'forgotPassword',
+    'changePassword',
+    'secureChangePassword',
+    'refreshToken',
+    'changePassword',
+    'secureChangePassword',
+    'verifyResetToken',
+    'verifyEmailTokenValid',
+    '__schema',
+    '__typename'
 ]
 
 

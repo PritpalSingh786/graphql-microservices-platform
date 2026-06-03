@@ -1,396 +1,490 @@
 import graphene
-import datetime
-import re
 import uuid
-import time
-from django.core.cache import cache
+import re
+from datetime import datetime
 from django.contrib.auth import get_user_model
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
-from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
 from graphql import GraphQLError
-from .types import UserType, DeviceType, SessionType
-from users.tasks import send_email_task
 from users.models import Device
 from users.utils import (
-    create_access_token, create_refresh_token, verify_token,
-    store_refresh_token, limit_user_sessions, blacklist_token_by_value,
-    get_active_tokens, refresh_both_tokens, revoke_user_session_by_jti
+    create_access_token,
+    create_refresh_token,
+    delete_email_token,
+    store_refresh_token,
+    decode_token,
+    verify_email_token,
+    generate_verification_token,
+    generate_password_reset_token,
+    verify_password_reset_token,
+    delete_password_reset_token,
+    secure_generate_password_reset_token,
+    secure_verify_password_reset_token,
+    delete_secure_password_reset_token,
+    change_user_password,
+    generate_password_reset_token as gen_pwd_token
 )
-from users.redis_token_manager import redis_token_manager
+from users.tasks import (
+    send_email_task,
+    send_new_login_alert_task,
+    send_password_changed_email_task,
+    logout_all_devices_task,
+    send_forgot_password_email_task
+)
+from .types import UserType
 
 User = get_user_model()
-token_generator = PasswordResetTokenGenerator()
+redis_client = settings.REDIS_CLIENT
 
-def rate_limit(ip, limit=5, window=60, key_prefix="login"):
-    key = f"rate_limit_{key_prefix}_{ip}"
-    requests = cache.get(key, [])
-    now = time.time()
-    requests = [t for t in requests if now - t < window]
-    
-    if len(requests) >= limit:
-        raise GraphQLError(f"Rate limit exceeded. Too many {key_prefix} attempts. Try after {window} seconds.")
-    
-    requests.append(now)
-    cache.set(key, requests, window)
-    return True
 
 class RegisterMutation(graphene.Mutation):
     class Arguments:
-        username = graphene.String(required=True)
+        user_id = graphene.String(required=True)
         email = graphene.String(required=True)
         password = graphene.String(required=True)
-    
+
     success = graphene.Boolean()
     message = graphene.String()
-    
-    def mutate(self, info, username, email, password):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=3, window=60, key_prefix="register")
+    user_id = graphene.String()
+    email = graphene.String()
+
+    def mutate(self, info, user_id, email, password):
+        # Validate user_id
+        if len(user_id) < 4:
+            raise GraphQLError("userId must be at least 4 characters long")
         
-        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
-            return RegisterMutation(success=False, message="Invalid email format")
+        if not re.match(r"^[a-zA-Z0-9_]+$", user_id):
+            raise GraphQLError("userId can contain only letters, numbers and underscore")
         
-        if len(username) < 4:
-            return RegisterMutation(success=False, message="Username must be at least 4 characters")
+        if User.objects.filter(user_id__iexact=user_id).exists():
+            raise GraphQLError("userId already exists")
         
-        if not re.match(r'^[a-zA-Z0-9_]+$', username):
-            return RegisterMutation(success=False, message="Username can contain only letters, numbers and underscore")
-        
-        if User.objects.filter(username__iexact=username).exists():
-            return RegisterMutation(success=False, message="Username already exists")
+        # Validate email
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        if not re.match(email_regex, email):
+            raise GraphQLError("Enter a valid email address")
         
         if User.objects.filter(email__iexact=email).exists():
-            return RegisterMutation(success=False, message="Email already exists")
+            raise GraphQLError("Email already exists")
         
-        if len(password) < 6:
-            return RegisterMutation(success=False, message="Password must be at least 6 characters")
-        
-        user = User.objects.create_user(username=username, email=email, password=password)
-        
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = token_generator.make_token(user)
-        expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-        link = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}/"
-        message = f"Verify your email before {expire} UTC\n\nLink: {link}"
-        
-        send_email_task.delay("Verify Your Email", message, [email])
-        
-        return RegisterMutation(success=True, message="User registered successfully! Please check your email.")
+        try:
+            user = User.objects.create_user(
+                user_id=user_id,
+                email=email,
+                password=password,
+                is_active=False,
+                email_verified=False
+            )
+            
+            # Send verification email
+            token = generate_verification_token(user.user_id)
+            verification_link = f"{settings.DOMAIN_URL}/verify-email?user_id={user.user_id}&token={token}"
+            
+            message = f"""
+            Hello {user.user_id},
+
+            Thank you for registering!
+
+            Please verify your email address by clicking the link below:
+
+            🔗 {verification_link}
+
+            ⏰ This link will expire in 5 minutes.
+
+            If you did not create this account, please ignore this email.
+
+            Best regards,
+            Your Team
+            """
+            
+            send_email_task.delay(
+                "Verify Your Email - 5 Minutes Expiry",
+                message,
+                [user.email]
+            )
+            
+            return RegisterMutation(
+                success=True,
+                message="Registration successful. Please check your email for verification link (expires in 5 minutes).",
+                user_id=user.user_id,
+                email=user.email
+            )
+            
+        except Exception as e:
+            raise GraphQLError(f"Error creating user: {str(e)}")
+
 
 class LoginMutation(graphene.Mutation):
     class Arguments:
-        username = graphene.String(required=True)
+        user_id = graphene.String(required=True)
         password = graphene.String(required=True)
         platform = graphene.String(required=True)
-        device_name = graphene.String(default_value="Unknown Device")
-    
+
     success = graphene.Boolean()
     message = graphene.String()
-    access_token = graphene.String()
-    refresh_token = graphene.String()
+    access = graphene.String()
+    refresh = graphene.String()
     user = graphene.Field(UserType)
-    
-    def mutate(self, info, username, password, platform, device_name):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=5, window=60, key_prefix="login")
+
+    def mutate(self, info, user_id, password, platform):
+        request = info.context
         
+        # Authenticate user
         try:
-            user = User.objects.get(username=username)
+            user = User.objects.get(user_id=user_id)
+            if not user.check_password(password):
+                raise User.DoesNotExist
         except User.DoesNotExist:
-            return LoginMutation(success=False, message="Invalid credentials")
+            raise GraphQLError("Invalid credentials")
         
-        if not user.check_password(password):
-            return LoginMutation(success=False, message="Invalid credentials")
-        
+        # Check email verification
         if not user.email_verified:
-            return LoginMutation(success=False, message="Please verify your email first")
+            # Resend verification email
+            token = generate_verification_token(user.user_id)
+            verification_link = f"{settings.DOMAIN_URL}/verify-email?user_id={user.user_id}&token={token}"
+            
+            message = f"""
+            Hello {user.user_id},
+
+            Please verify your email address by clicking the link below:
+
+            🔗 {verification_link}
+
+            ⏰ This link will expire in 5 minutes.
+            """
+            
+            send_email_task.delay(
+                "Verify Your Email",
+                message,
+                [user.email]
+            )
+            
+            raise GraphQLError("Email not verified. A verification link has been sent to your email.")
         
+        # Get device info
+        device_name = request.headers.get("User-Agent", "Unknown")
+        
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip_address = x_forwarded_for.split(',')[0].strip()
+        else:
+            ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1')
+        
+        # Create or update device
         device, created = Device.objects.get_or_create(
             user=user,
             device_name=device_name,
             defaults={
-                "ip_address": info.context.META.get("REMOTE_ADDR"),
+                "ip_address": ip_address,
                 "device_id": uuid.uuid4()
             }
         )
         
-        device.ip_address = info.context.META.get("REMOTE_ADDR")
+        device.ip_address = ip_address
         device.save()
-        
         device_id = str(device.device_id)
+        
+        # Send alert for new login
+        reset_token = secure_generate_password_reset_token(user.id)
+        send_new_login_alert_task.delay(
+            user_email=user.email,
+            id=user.id,
+            userId=user.user_id,
+            device_name=device_name,
+            ip_address=ip_address,
+            platform=platform,
+            reset_token=reset_token
+        )
+        
+        # Create tokens
+        access_token = create_access_token(user, device_id, platform)
+        refresh_token = create_refresh_token(user, device_id, platform)
+        
+        # Store refresh token
+        store_refresh_token(
+            refresh_token,
+            user,
+            device_id,
+            platform,
+            device_name=device_name,
+            ip_address=ip_address
+        )
+        
+        return LoginMutation(
+            success=True,
+            message="Login successful",
+            access=access_token,
+            refresh=refresh_token,
+            user=user
+        )
+
+
+class RefreshTokenMutation(graphene.Mutation):
+    class Arguments:
+        refresh = graphene.String(required=True)
+        platform = graphene.String(required=True)
+
+    success = graphene.Boolean()
+    access = graphene.String()
+    refresh = graphene.String()
+
+    def mutate(self, info, refresh, platform):
+        payload = decode_token(refresh, "refresh")
+        
+        if not payload:
+            raise GraphQLError("Invalid or expired refresh token")
+        
+        user_id = payload.get("user_id")
+        jti = payload.get("jti")
+        
+        redis_key = f"hash-rt-for-user-{user_id}"
+        token_data = redis_client.hget(redis_key, jti)
+        
+        if not token_data:
+            raise GraphQLError("Session expired. Please login again.")
+        
+        import json
+        token_info = json.loads(token_data)
+        
+        created_at = datetime.fromisoformat(token_info["created_at"])
+        token_age = (datetime.utcnow() - created_at).days
+        
+        if token_age >= settings.REFRESH_TOKEN_LIFETIME:
+            redis_client.hdel(redis_key, jti)
+            raise GraphQLError("Session expired. Please login again.")
+        
+        # Remove old token and create new ones
+        redis_client.hdel(redis_key, jti)
+        
+        user = User.objects.get(id=user_id)
+        device_id = payload.get("device_id")
         
         access_token = create_access_token(user, device_id, platform)
         refresh_token = create_refresh_token(user, device_id, platform)
         
-        store_refresh_token(
-            refresh_token, user, device_id, platform,
-            device_name=device_name,
-            ip_address=info.context.META.get('REMOTE_ADDR', '')
-        )
-        
-        active_before = len(get_active_tokens(user))
-        revoked_count = limit_user_sessions(user, max_sessions=5)
-        active_after = len(get_active_tokens(user))
-        
-        return LoginMutation(
-            success=True,
-            message=f"Login successful. Sessions: {active_after}/5 (revoked {revoked_count} old)",
-            access_token=access_token,
-            refresh_token=refresh_token,
-            user=user
-        )
-
-class VerifyEmailMutation(graphene.Mutation):
-    class Arguments:
-        uidb64 = graphene.String(required=True)
-        token = graphene.String(required=True)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    
-    def mutate(self, info, uidb64, token):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=10, window=60, key_prefix="verify_email")
-        
-        try:
-            uid = force_str(urlsafe_base64_decode(uidb64))
-            user = User.objects.get(pk=uid)
-        except Exception:
-            return VerifyEmailMutation(success=False, message="Invalid verification link")
-        
-        if token_generator.check_token(user, token):
-            user.email_verified = True
-            user.save()
-            return VerifyEmailMutation(success=True, message="Email verified successfully!")
-        
-        return VerifyEmailMutation(success=False, message="Invalid or expired verification link")
-
-class RefreshTokenMutation(graphene.Mutation):
-    class Arguments:
-        refresh_token = graphene.String(required=True)
-        platform = graphene.String(required=True)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    access_token = graphene.String()
-    refresh_token = graphene.String()
-    
-    def mutate(self, info, refresh_token, platform):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=20, window=60, key_prefix="refresh")
-        
-        new_access, new_refresh = refresh_both_tokens(refresh_token)
-        
-        if not new_access:
-            return RefreshTokenMutation(success=False, message="Invalid or expired refresh token")
+        store_refresh_token(refresh_token, user, device_id, platform)
         
         return RefreshTokenMutation(
             success=True,
-            message="Token refreshed successfully",
-            access_token=new_access,
-            refresh_token=new_refresh
+            access=access_token,
+            refresh=refresh_token
         )
+
 
 class LogoutMutation(graphene.Mutation):
     class Arguments:
-        refresh_token = graphene.String(required=True)
-        all_devices = graphene.Boolean(default_value=False)
-    
+        refresh = graphene.String(required=True)
+
     success = graphene.Boolean()
     message = graphene.String()
-    count = graphene.Int()
-    
-    def mutate(self, info, refresh_token, all_devices=False):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
+
+    def mutate(self, info, refresh):
+        payload = decode_token(refresh, "refresh")
         
-        if not user_id:
-            raise GraphQLError("Authentication required")
+        if not payload:
+            raise GraphQLError("Invalid or expired refresh token")
         
+        user_id = payload.get("user_id")
+        jti = payload.get("jti")
+        
+        redis_key = f"hash-rt-for-user-{user_id}"
+        
+        if not redis_client.hexists(redis_key, jti):
+            raise GraphQLError("Session already expired")
+        
+        redis_client.hdel(redis_key, jti)
+        
+        return LogoutMutation(
+            success=True,
+            message="Logout successful"
+        )
+
+
+class ForgotPasswordMutation(graphene.Mutation):
+    class Arguments:
+        user_id = graphene.String(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, user_id):
         try:
-            user = User.objects.get(id=user_id)
+            print(user_id, "userIdddd")
+            user = User.objects.get(user_id=user_id)
+            print(user, "userrr")
         except User.DoesNotExist:
-            raise GraphQLError("User not found")
+            raise GraphQLError("Invalid User ID.")
         
-        if all_devices:
-            count = redis_token_manager.revoke_all_user_tokens(user.id, "logout_all_devices", notify_websocket=True)
-            return LogoutMutation(
-                success=True,
-                message=f"Logged out from {count} devices",
-                count=count
-            )
-        else:
-            payload = verify_token(refresh_token, 'refresh')
-            if payload and payload.get('device_id'):
-                redis_token_manager._send_websocket_notification(
-                    user.id,
-                    payload.get('device_id'),
-                    "You have been logged out from this device"
-                )
-            
-            blacklist_token_by_value(refresh_token, reason="logout")
-            return LogoutMutation(
-                success=True,
-                message="Logged out successfully",
-                count=1
-            )
+        token = generate_password_reset_token(user.id)
+        reset_link = f"{settings.DOMAIN_URL}/password-change-template/{user.id}/{token}/"
+        
+        message = f"""
+        Hello {user.user_id},
 
-class PasswordResetRequestMutation(graphene.Mutation):
-    class Arguments:
-        email = graphene.String(required=True)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    
-    def mutate(self, info, email):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=3, window=60, key_prefix="password_reset")
-        
-        user = User.objects.filter(email=email).first()
-        
-        if not user:
-            return PasswordResetRequestMutation(success=True, message="If account exists, password reset email sent")
-        
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = token_generator.make_token(user)
-        expire = datetime.datetime.utcnow() + datetime.timedelta(hours=2)
-        link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}/"
-        message = f"Reset your password before {expire} UTC\n\nLink: {link}"
-        
-        send_email_task.delay("Password Reset Request", message, [email])
-        
-        return PasswordResetRequestMutation(success=True, message="If account exists, password reset email sent")
+        We received a request to reset your password.
 
-class SetNewPasswordMutation(graphene.Mutation):
+        Click the link below to reset it:
+
+        🔗 {reset_link}
+
+        This link will expire in 5 minutes.
+
+        If you did not request a password reset,
+        please ignore this email.
+
+        Regards,
+        Your Team
+        """
+        
+        send_forgot_password_email_task.delay(
+            "Reset Your Password",
+            message,
+            [user.email]
+        )
+        
+        return ForgotPasswordMutation(
+            success=True,
+            message="Password reset link sent successfully."
+        )
+
+
+class PasswordChangeMutation(graphene.Mutation):
     class Arguments:
-        uidb64 = graphene.String(required=True)
+        user_id = graphene.String(required=True)
         token = graphene.String(required=True)
         new_password = graphene.String(required=True)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    
-    def mutate(self, info, uidb64, token, new_password):
-        ip = info.context.META.get('REMOTE_ADDR', '0.0.0.0')
-        rate_limit(ip, limit=5, window=60, key_prefix="set_password")
-        
-        try:
-            uid = force_str(urlsafe_base64_decode(uidb64))
-            user = User.objects.get(pk=uid)
-        except Exception:
-            return SetNewPasswordMutation(success=False, message="Invalid reset link")
-        
-        if len(new_password) < 6:
-            return SetNewPasswordMutation(success=False, message="Password must be at least 6 characters")
-        
-        if token_generator.check_token(user, token):
-            user.set_password(new_password)
-            user.save()
-            
-            count = redis_token_manager.revoke_all_user_tokens(user.id, "password_changed", notify_websocket=True)
-            
-            return SetNewPasswordMutation(
-                success=True,
-                message=f"Password reset successful! {count} sessions terminated. Please login again."
-            )
-        
-        return SetNewPasswordMutation(success=False, message="Invalid or expired reset link")
+        confirm_password = graphene.String(required=True)
 
-class ChangePasswordMutation(graphene.Mutation):
-    class Arguments:
-        old_password = graphene.String(required=True)
-        new_password = graphene.String(required=True)
-    
     success = graphene.Boolean()
     message = graphene.String()
-    
-    def mutate(self, info, old_password, new_password):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
+
+    def mutate(self, info, user_id, token, new_password, confirm_password):
+        # Validate token
+        if not verify_password_reset_token(user_id, token):
+            raise GraphQLError("Invalid or expired link.")
         
-        if not user_id:
-            raise GraphQLError("Authentication required")
+        if new_password != confirm_password:
+            raise GraphQLError("Passwords do not match.")
         
         try:
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
-            raise GraphQLError("User not found")
-        
-        if not user.check_password(old_password):
-            return ChangePasswordMutation(success=False, message="Wrong password")
-        
-        if len(new_password) < 6:
-            return ChangePasswordMutation(success=False, message="Password must be at least 6 characters")
+            raise GraphQLError("User not found.")
         
         user.set_password(new_password)
         user.save()
         
-        count = redis_token_manager.revoke_all_user_tokens(user.id, "password_changed", notify_websocket=True)
+        delete_password_reset_token(user.id, token)
         
-        return ChangePasswordMutation(
+        return PasswordChangeMutation(
             success=True,
-            message=f"Password changed successfully! {count} sessions terminated. Please login again."
+            message="Password changed successfully. Now you can login."
         )
 
-class RemoveDeviceMutation(graphene.Mutation):
+
+class SecurePasswordChangeMutation(graphene.Mutation):
     class Arguments:
-        device_id = graphene.String(required=True)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    
-    def mutate(self, info, device_id):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        
-        if not user_id:
-            raise GraphQLError("Authentication required")
-        
-        try:
-            user = User.objects.get(id=user_id)
-            device = Device.objects.get(device_id=device_id, user=user)
-        except (User.DoesNotExist, Device.DoesNotExist):
-            raise GraphQLError("Device not found")
-        
-        count = redis_token_manager.revoke_specific_device_tokens(user.id, device_id, f"device_removed_{device.device_name}")
-        
-        device.delete()
-        
-        return RemoveDeviceMutation(
-            success=True,
-            message=f"Device removed successfully. {count} sessions terminated."
-        )
+        user_id = graphene.String(required=True)
+        token = graphene.String(required=True)
+        current_password = graphene.String(required=True)
+        new_password = graphene.String(required=True)
+        confirm_password = graphene.String(required=True)
 
-class RemoveOtherDevicesMutation(graphene.Mutation):
     success = graphene.Boolean()
     message = graphene.String()
-    count = graphene.Int()
-    
-    def mutate(self, info):
-        user_id = info.context.META.get('HTTP_X_USER_ID', '')
-        current_device_id = info.context.META.get('HTTP_X_DEVICE_ID', '')
+    redirect = graphene.String()
+
+    def mutate(self, info, user_id, token, current_password, new_password, confirm_password):
+        # Validate all fields
+        if not all([user_id, token, current_password, new_password, confirm_password]):
+            raise GraphQLError("All fields are required")
         
-        if not user_id:
-            raise GraphQLError("Authentication required")
+        # Validate passwords match
+        if new_password != confirm_password:
+            raise GraphQLError("New passwords do not match")
         
+        # Verify token
+        if not secure_verify_password_reset_token(user_id, token):
+            raise GraphQLError("Invalid or expired link.")
+        
+        # Get user
         try:
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             raise GraphQLError("User not found")
         
-        devices = Device.objects.filter(user=user)
+        # Verify current password
+        if not user.check_password(current_password):
+            raise GraphQLError("Current password is incorrect")
         
-        if current_device_id:
-            devices = devices.exclude(device_id=current_device_id)
+        # Change password
+        change_user_password(user, new_password)
         
-        removed_count = 0
-        for device in devices:
-            count = redis_token_manager.revoke_specific_device_tokens(user.id, device.device_id, "device_removed_admin")
-            if count > 0:
-                removed_count += 1
-            device.delete()
-        
-        return RemoveOtherDevicesMutation(
-            success=True,
-            message=f"Removed {removed_count} other devices",
-            count=removed_count
+        # Send email notification
+        send_password_changed_email_task.delay(
+            user_email=user.email,
+            user_name=user.user_id
         )
+        
+        # Logout from all devices
+        logout_all_devices_task.delay(user.id)
+        
+        # Delete token
+        delete_secure_password_reset_token(user_id, token)
+        
+        return SecurePasswordChangeMutation(
+            success=True,
+            message="Password changed successfully! You have been logged out from all devices.",
+            redirect="/login/"
+        )
+
+
+class VerifyEmailMutation(graphene.Mutation):
+    class Arguments:
+        user_id = graphene.String(required=True)
+        token = graphene.String(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    user_id = graphene.String()
+    email = graphene.String()
+
+    def mutate(self, info, user_id, token):
+        # Validate parameters
+        if not user_id or not token:
+            raise GraphQLError("Invalid verification link. Missing required parameters.")
+        
+        # Get user
+        try:
+            user = User.objects.get(user_id=user_id)
+        except User.DoesNotExist:
+            raise GraphQLError("User not found. The verification link may be invalid.")
+        
+        # Verify token
+        is_valid, message = verify_email_token(user.user_id, token)
+        
+        if not is_valid:
+            raise GraphQLError(message)
+        
+        # Activate user
+        user.email_verified = True
+        user.is_active = True
+        user.save()
+        delete_email_token(user_id, token)
+        
+        return VerifyEmailMutation(
+            success=True,
+            message="Email verified successfully",
+            user_id=user.user_id,
+            email=user.email
+        )
+
+
+class Mutation(graphene.ObjectType):
+    register = RegisterMutation.Field()
+    login = LoginMutation.Field()
+    refresh_token = RefreshTokenMutation.Field()
+    logout = LogoutMutation.Field()
+    forgot_password = ForgotPasswordMutation.Field()
+    change_password = PasswordChangeMutation.Field()
+    secure_change_password = SecurePasswordChangeMutation.Field()
+    verify_email = VerifyEmailMutation.Field()

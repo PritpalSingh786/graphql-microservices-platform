@@ -1,46 +1,94 @@
 import jwt
+
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
+
 from channels.middleware import BaseMiddleware
-from asgiref.sync import sync_to_async
-from users.models import User
-from users.redis_token_manager import redis_token_manager
+
+
+class JWTUser:
+
+    def __init__(self, user_id):
+        self.id = user_id
+        self.user_id = user_id
+        self.is_authenticated = True
 
 
 class JWTAuthMiddleware(BaseMiddleware):
-    async def __call__(self, scope, receive, send):
-        query_string = scope["query_string"].decode()
+
+    async def __call__(
+        self,
+        scope,
+        receive,
+        send
+    ):
+
+        query_string = (
+            scope["query_string"]
+            .decode()
+        )
+
         token = None
-        
+
         if "token=" in query_string:
-            token = query_string.split("token=")[1].split("&")[0]
-        
+            token = (
+                query_string
+                .split("token=")[1]
+                .split("&")[0]
+            )
+
         scope["user"] = AnonymousUser()
-        
+
         if token:
+
             try:
+
                 payload = jwt.decode(
                     token,
                     settings.SECRET_KEY,
-                    algorithms=[settings.JWT_ALGORITHM],
+                    algorithms=[
+                        settings.JWT_ALGORITHM
+                    ],
                     audience=settings.JWT_AUDIENCE,
                     issuer=settings.JWT_ISSUER
                 )
-                
-                # Redis blacklist check
-                jti = payload.get('jti')
-                if jti:
-                    is_blacklisted = await sync_to_async(redis_token_manager.is_blacklisted)(jti)
-                    if is_blacklisted:
-                        await send({"type": "websocket.close", "code": 4001})
-                        return
-                
-                user = await sync_to_async(User.objects.get)(id=payload["user_id"])
-                scope["user"] = user
-                scope["device_id"] = payload.get("device_id")
-                
-            except Exception:
-                await send({"type": "websocket.close", "code": 4001})
+
+                if (
+                    payload.get("type")
+                    != "access"
+                ):
+                    raise jwt.InvalidTokenError(
+                        "Invalid token type"
+                    )
+
+                scope["user"] = JWTUser(
+                    payload["user_id"]
+                )
+
+                scope["device_id"] = (
+                    payload.get("device_id")
+                )
+
+                scope["platform"] = (
+                    payload.get("platform")
+                )
+
+            except Exception as e:
+
+                print(
+                    "JWT ERROR:",
+                    str(e)
+                )
+
+                await send({
+                    "type": "websocket.close",
+                    "code": 4001
+                })
+
                 return
-        
-        return await super().__call__(scope, receive, send)
+
+        return await super().__call__(
+            scope,
+            receive,
+            send
+        )
