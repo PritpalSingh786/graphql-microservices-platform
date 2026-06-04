@@ -322,16 +322,17 @@ ws://localhost:8001/ws/auth/?token=<access_token>
 | Email Verification | `/verify-email?user_id={user_id}&token={token}` |
 | Password Reset | `/password-change-template/{user_id}/{token}/` |
 | Secure Password Change | `/secure-password-change-template/{user_id}/{token}/` |
-| Login Page | `/login/` |
+
 
 ---
 
 ## 📁 File Upload Features
 
-- Single and multi-file upload support
-- Image validation (size, type)
-- Cloud storage integration ready
-- Media URL generation
+- Upload images with blog posts
+- Multi-file upload support
+- Image format and size validation
+- Local storage with URL-based access
+- MongoDB integration for metadata storage
 
 ---
 
