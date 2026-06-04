@@ -268,8 +268,6 @@ This enables:
 | `me` | Get current user info | ✅ Yes |
 | `myDevices` | Get user's devices | ✅ Yes |
 | `getUser` | Get user by ID | ✅ Yes |
-| `verifyResetToken` | Check if reset token is valid | ❌ No |
-| `verifyEmailTokenValid` | Check if email token is valid | ❌ No |
 
 ### Blog Service Mutations
 
@@ -345,6 +343,7 @@ Benefits:
 
 - Consistent runtime environment across all services
 - Faster onboarding and setup process
+- Reduces duplication by allowing multiple images to share and reuse common layers, saving storage space and improving build efficiency.
 - Simplified dependency management
 - Lightweight and reproducible containers
 - Easier deployment and scalability
