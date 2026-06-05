@@ -689,7 +689,7 @@ This project is open-source and available under the MIT License.
 
 - 🔗 [GitHub Profile](https://github.com/PritpalSingh786)
 - 🔗 [Project Repository](https://github.com/PritpalSingh786/graphql-microservices-platform)
-- 🔗 [Demo Video Link](https://youtu.be/9GweB-SjDbM)
+- 🔗 [Demo Video Link](https://youtu.be/z18deUyl468)
 
 ---
 
