@@ -221,3 +221,20 @@ echo "========================================="
 echo "✅ All tests completed!"
 echo "========================================="
 
+
+
+# Start Redis on port 6381
+redis-server --port 6381 --daemonize yes
+
+# Verify
+redis-cli -p 6381 ping
+# ✅ Should return: PONG
+
+
+# Find what's using port 8000
+sudo lsof -i :8000
+
+
+# Kill process on port 8000
+sudo kill -9 $(sudo lsof -t -i:8000)
+
